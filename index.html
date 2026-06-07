@@ -106,6 +106,10 @@ let tipMsg=null, tipTimer=0;
 let shake=0;
 const bullets=[], blocks=[], sparks=[];
 
+// ── Leaderboard ──────────────────────────────────────────
+const LB_API = "https://clippy-leaderboard.mark-30e.workers.dev";
+let initials="", goPhase="enter", lbScores=[], myRank=0; // goPhase ∈ enter|sending|board|err
+
 // ── Player ───────────────────────────────────────────────
 const P = { x:W*0.12, y:H/2-20, w:34, h:44, spd:4.8 };
 
@@ -114,9 +118,45 @@ const K={};
 addEventListener('keydown', e=>{
   K[e.code]=true;
   if(e.code==='Space'){e.preventDefault(); if(state==='playing') fire();}
-  if(e.code==='Enter' && (state==='title'||state==='over')) start();
+  if(e.code==='Enter' && state==='title'){ start(); return; }
+
+  // ── Game-over arcade flow ──
+  if(state==='over'){
+    if(goPhase==='enter'){
+      if(/^Key[A-Z]$/.test(e.code)){
+        if(initials.length<3) initials += e.code.slice(3); // append uppercase letter
+      } else if(e.code==='Backspace'){
+        e.preventDefault();
+        initials = initials.slice(0,-1);
+      } else if(e.code==='Enter'){
+        if(initials.length>=1) submitScore();
+      }
+    } else if(goPhase==='board' || goPhase==='err'){
+      if(e.code==='Enter') start();
+    }
+    return;
+  }
 });
 addEventListener('keyup', e=>{ K[e.code]=false; });
+
+// ── Submit score to leaderboard ──────────────────────────
+async function submitScore(){
+  goPhase='sending';
+  try{
+    const r = await fetch(LB_API+"/scores", {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name:initials, score})
+    });
+    if(!r.ok) throw new Error('bad status '+r.status);
+    const resp = await r.json();
+    lbScores = resp.scores || [];
+    myRank = resp.rank || 0;
+    goPhase='board';
+  }catch(err){
+    goPhase='err';
+  }
+}
 
 // ── Helpers ──────────────────────────────────────────────
 const rnd  = (a,b)=> a + Math.random()*(b-a);
@@ -240,7 +280,7 @@ function update(){
   }
 
   if(shake>0) shake*=0.82;
-  if(lives<=0){ lives=0; state='over'; }
+  if(lives<=0){ lives=0; state='over'; shake=0; goPhase='enter'; initials=''; }
 }
 
 // ── Draw helpers ─────────────────────────────────────────
@@ -502,7 +542,8 @@ function drawTitle(){
 function drawGameOver(){
   ctx.fillStyle='rgba(0,0,0,0.65)'; ctx.fillRect(0,0,W,H);
 
-  const dw=320,dh=210, dx=(W-dw)/2, dy=(H-dh)/2;
+  const dw=360,dh=340, dx=(W-dw)/2, dy=(H-dh)/2;
+  const cx=dx+dw/2;
   ctx.fillStyle='#c0c0c0'; ctx.fillRect(dx,dy,dw,dh);
   ctx.strokeStyle='#fff'; ctx.lineWidth=2;
   ctx.beginPath();
@@ -518,29 +559,117 @@ function drawGameOver(){
   ctx.textBaseline='middle'; ctx.textAlign='left';
   ctx.fillText('❌ FATAL ERROR — Literature Lost', dx+8, dy+15);
 
-  drawClippy(dx+50, dy+145, 1.7);
+  if(goPhase==='enter'){
+    ctx.fillStyle='#000'; ctx.font='bold 22px "Courier New"';
+    ctx.textAlign='center'; ctx.textBaseline='top';
+    ctx.fillText('GAME OVER', cx, dy+42);
+    ctx.font='13px "Courier New"';
+    ctx.fillText(`Final Score: ${score}`, cx, dy+78);
+    ctx.fillText(`Level Reached: ${level}`, cx, dy+98);
 
-  ctx.fillStyle='#000'; ctx.font='bold 22px "Courier New"';
-  ctx.textAlign='center'; ctx.textBaseline='top';
-  ctx.fillText('GAME OVER', W/2+30, dy+42);
-  ctx.font='13px "Courier New"';
-  ctx.fillText(`Final Score: ${score}`, W/2+30, dy+74);
-  ctx.fillText(`Level Reached: ${level}`, W/2+30, dy+94);
-  ctx.fillText(`Slop survived you.`, W/2+30, dy+118);
+    ctx.font='bold 13px "Courier New"'; ctx.fillStyle='#000080';
+    ctx.fillText('ENTER YOUR INITIALS', cx, dy+136);
 
-  ctx.fillStyle='#000080';
-  ctx.fillRect(dx+80, dy+dh-46, 160, 30);
-  ctx.strokeStyle='#fff'; ctx.lineWidth=1;
-  ctx.strokeRect(dx+80, dy+dh-46, 160, 30);
-  ctx.fillStyle='#fff'; ctx.font='bold 12px "Courier New"';
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText('ENTER = Play Again', W/2+30, dy+dh-31);
+    // 3 initial slots with blinking cursor
+    const padded = (initials + '   ').slice(0,3);
+    const cur = (Math.floor(tick/16)%2===0) && initials.length<3;
+    ctx.font='bold 38px "Courier New"';
+    const slotW=46, totalW=slotW*3, sx=cx-totalW/2;
+    for(let i=0;i<3;i++){
+      const chx=sx+i*slotW+slotW/2;
+      const ch = i<initials.length ? initials[i] : (i===initials.length && cur ? '_' : ' ');
+      ctx.fillStyle = i<initials.length ? '#000' : '#000080';
+      ctx.fillText(ch, chx, dy+162);
+      // underline
+      ctx.strokeStyle='#808080'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(chx-16, dy+208); ctx.lineTo(chx+16, dy+208); ctx.stroke();
+    }
+
+    ctx.fillStyle='#444'; ctx.font='10px "Courier New"';
+    ctx.fillText('type 3 letters · ENTER to submit', cx, dy+232);
+
+    drawClippy(dx+44, dy+dh-46, 1.4);
+
+  } else if(goPhase==='sending'){
+    drawClippy(cx, dy+150, 2.4);
+    ctx.fillStyle='#000'; ctx.font='bold 16px "Courier New"';
+    ctx.textAlign='center'; ctx.textBaseline='top';
+    ctx.fillText('Saving score…', cx, dy+232);
+
+  } else if(goPhase==='board'){
+    ctx.fillStyle='#000080'; ctx.font='bold 15px "Courier New"';
+    ctx.textAlign='center'; ctx.textBaseline='top';
+    ctx.fillText('🏆 TOP SLOP BLASTERS', cx, dy+38);
+
+    const rows = lbScores.slice(0,10);
+    ctx.font='12px "Courier New"'; ctx.textBaseline='top';
+    const lx=dx+22, rx=dx+dw-22, ry=dy+66, rh=20;
+    let highlighted=false;
+    rows.forEach((s,i)=>{
+      const y=ry+i*rh;
+      const isMe = !highlighted && (i+1)===myRank && s.name===initials && s.score===score;
+      if(isMe){
+        highlighted=true;
+        ctx.fillStyle='#000080'; ctx.fillRect(dx+8, y-2, dw-16, rh-2);
+      }
+      ctx.fillStyle = isMe ? '#fff' : '#000';
+      const rank=String(i+1).padStart(2,' ');
+      const nm=(s.name||'???').padEnd(3,' ');
+      const sc=String(s.score);
+      ctx.textAlign='left';
+      ctx.fillText(`${rank}. ${nm}`, lx, y);
+      // dotted leader
+      ctx.fillStyle = isMe ? '#bcd' : '#888';
+      const dotsStart=lx+78, dotsEnd=rx-(sc.length*7.2)-4;
+      ctx.font='12px "Courier New"';
+      let dots='';
+      for(let dxp=dotsStart; dxp<dotsEnd; dxp+=6) dots+='.';
+      ctx.fillText(dots, dotsStart, y);
+      ctx.fillStyle = isMe ? '#fff' : '#000';
+      ctx.textAlign='right';
+      ctx.fillText(sc, rx, y);
+    });
+
+    if(rows.length===0){
+      ctx.fillStyle='#444'; ctx.font='12px "Courier New"'; ctx.textAlign='center';
+      ctx.fillText('(no scores yet)', cx, ry+10);
+    }
+
+    // your rank if outside top 10
+    if(myRank>10){
+      ctx.fillStyle='#800000'; ctx.font='bold 12px "Courier New"'; ctx.textAlign='center';
+      ctx.fillText(`Your rank: #${myRank}`, cx, dy+dh-66);
+    }
+
+    ctx.fillStyle='#000080';
+    ctx.fillRect(cx-90, dy+dh-44, 180, 30);
+    ctx.strokeStyle='#fff'; ctx.lineWidth=1;
+    ctx.strokeRect(cx-90, dy+dh-44, 180, 30);
+    ctx.fillStyle='#fff'; ctx.font='bold 12px "Courier New"';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('ENTER = Play Again', cx, dy+dh-29);
+
+  } else { // err
+    drawClippy(cx, dy+140, 2);
+    ctx.fillStyle='#000'; ctx.font='13px "Courier New"';
+    ctx.textAlign='center'; ctx.textBaseline='top';
+    ctx.fillText('Couldn’t reach leaderboard.', cx, dy+212);
+    ctx.fillText(`Final Score: ${score}`, cx, dy+234);
+
+    ctx.fillStyle='#000080';
+    ctx.fillRect(cx-90, dy+dh-44, 180, 30);
+    ctx.strokeStyle='#fff'; ctx.lineWidth=1;
+    ctx.strokeRect(cx-90, dy+dh-44, 180, 30);
+    ctx.fillStyle='#fff'; ctx.font='bold 12px "Courier New"';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('ENTER = Play Again', cx, dy+dh-29);
+  }
 }
 
 // ── Main render ──────────────────────────────────────────
 function render(){
   ctx.save();
-  if(shake>0.5){
+  if(shake>0.5 && state!=='over'){
     ctx.translate((Math.random()-.5)*shake, (Math.random()-.5)*shake);
   }
 
